@@ -7,6 +7,13 @@ import { Package, QrCode, BarChart3, FileText, LogOut, Scan, Plus, Search, Print
 import { QRCodeSVG } from "qrcode.react";
 import { jsPDF } from "jspdf";
 import "jspdf-autotable";
+import { supabase } from "./lib/supabase";
+import {
+  QRCodeReader,
+  BinaryBitmap,
+  HybridBinarizer,
+  HTMLCanvasElementLuminanceSource,
+} from "@zxing/library";
 
 // ─── MOCK DATA ────────────────────────────────────────────────────────────────
 
@@ -122,19 +129,21 @@ const css = `
   .nav-item.active { color: #fff; background: rgba(0,161,229,0.15); border-left-color: var(--accent); }
   .nav-item svg { width: 16px; height: 16px; flex-shrink: 0; }
   .sidebar-user {
-    padding: 16px 20px; border-top: 1px solid rgba(255,255,255,0.08);
+    padding: 16px 12px; border-top: 1px solid rgba(255,255,255,0.08);
     display: flex; align-items: center; gap: 10px;
+    min-width: 0;
   }
+  .sidebar-user > div:not(.user-avatar) { flex: 1; min-width: 0; overflow: hidden; }
   .user-avatar {
     width: 34px; height: 34px; border-radius: 50%; background: var(--accent);
     display: flex; align-items: center; justify-content: center;
     font-weight: 700; font-size: 13px; color: #fff; flex-shrink: 0;
   }
-  .user-name { font-size: 13px; font-weight: 600; color: #fff; }
-  .user-role { font-size: 11px; color: rgba(255,255,255,0.4); }
+  .user-name { font-size: 13px; font-weight: 600; color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .user-role { font-size: 11px; color: rgba(255,255,255,0.4); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .logout-btn {
-    margin-left: auto; background: none; border: none; color: rgba(255,255,255,0.3);
-    cursor: pointer; padding: 4px; border-radius: 4px; display: flex; transition: color 0.15s;
+    flex-shrink: 0; margin-left: auto; background: none; border: none; color: rgba(255,255,255,0.3);
+    cursor: pointer; padding: 6px; border-radius: 4px; display: flex; transition: color 0.15s;
   }
   .logout-btn:hover { color: var(--accent); }
 
@@ -243,6 +252,7 @@ const css = `
   .scan-container { max-width: 480px; margin: 0 auto; }
   .scan-viewfinder {
     background: var(--navy); border-radius: 16px; aspect-ratio: 1;
+    min-height: 280px; width: 100%;
     display: flex; align-items: center; justify-content: center;
     position: relative; overflow: hidden; margin-bottom: 20px;
   }
@@ -406,12 +416,12 @@ const css = `
 // ─── REAL QR CODE (scannable, encodes SKU or deep-link URL) ─────────────────────
 
 function ItemQRCode({ sku, size = 80, useUrl = true }) {
-  const path = typeof window !== "undefined"
-    ? (window.location.pathname || "/").replace(/\/$/, "") || ""
+  const base = typeof window !== "undefined"
+    ? window.location.origin + (window.location.pathname || "/").replace(/\/$/, "") || ""
     : "";
-  const value = useUrl && typeof window !== "undefined"
-    ? `${window.location.origin}${path ? path : ""}#scan?sku=${encodeURIComponent(sku)}`
-    : sku;
+  const value = useUrl && typeof window !== "undefined" && base
+    ? `${base}#scan?sku=${encodeURIComponent(sku)}`
+    : String(sku);
   return (
     <QRCodeSVG
       value={value}
@@ -508,11 +518,27 @@ function LoginPage({ onLogin }) {
   const [email, setEmail] = useState('');
   const [pass, setPass] = useState('');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
-  const handleLogin = () => {
+  const handleSubmit = async () => {
+    setError('');
+    if (!email || !pass) {
+      setError('Email and password are required');
+      return;
+    }
     setLoading(true);
-    setTimeout(() => { setLoading(false); onLogin(); }, 900);
+    try {
+      const { error: err } = await supabase.auth.signInWithPassword({ email, password: pass });
+      if (err) throw err;
+      if (onLogin) onLogin();
+    } catch (err) {
+      setError(err.message || 'Sign in failed');
+    } finally {
+      setLoading(false);
+    }
   };
+
+  const hasSupabase = import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY;
 
   return (
     <div className="login-page">
@@ -520,15 +546,23 @@ function LoginPage({ onLogin }) {
         <div className="login-logo">INVENTORY FLOW<span>.</span></div>
         <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--accent)', letterSpacing: 1, marginTop: 2 }}>STOCK MANAGER</div>
         <div className="login-sub">Sign in to manage construction inventory</div>
+        {!hasSupabase && (
+          <div className="alert alert-yellow" style={{ marginBottom: 16 }}>
+            Supabase not configured. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to .env
+          </div>
+        )}
+        {error && (
+          <div className="alert alert-red" style={{ marginBottom: 16 }}>{error}</div>
+        )}
         <div className="form-group">
           <label className="form-label">Email Address</label>
-          <input className="form-input" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@inventoryflow.ie" />
+          <input className="form-input" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@inventoryflow.ie" disabled={!hasSupabase} />
         </div>
         <div className="form-group">
           <label className="form-label">Password</label>
-          <input className="form-input" type="password" value={pass} onChange={e => setPass(e.target.value)} placeholder="••••••••" onKeyDown={e => e.key === 'Enter' && handleLogin()} />
+          <input className="form-input" type="password" value={pass} onChange={e => setPass(e.target.value)} placeholder="••••••••" onKeyDown={e => e.key === 'Enter' && handleSubmit()} disabled={!hasSupabase} />
         </div>
-        <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center', marginTop: 8, padding: '13px' }} onClick={handleLogin}>
+        <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center', marginTop: 8, padding: '13px' }} onClick={handleSubmit} disabled={!hasSupabase || loading}>
           {loading ? 'Signing in...' : 'Sign In'}
         </button>
         <div className="login-footer">Powered by Supabase Auth · JWT Secured</div>
@@ -537,11 +571,11 @@ function LoginPage({ onLogin }) {
   );
 }
 
-function DashboardPage({ items }) {
+function DashboardPage({ items, scannedToday: scannedTodayProp, totalItems: totalItemsProp }) {
   const itemList = items || MOCK_ITEMS;
   const lowStock = itemList.filter(i => i.lastCount <= i.threshold);
-  const totalItems = itemList.length;
-  const scannedToday = Math.min(6, Math.floor(totalItems * 0.8));
+  const totalItems = totalItemsProp ?? itemList.length;
+  const scannedToday = scannedTodayProp ?? Math.min(6, Math.floor(totalItems * 0.8));
   return (
     <div>
       <div className="stat-grid">
@@ -615,7 +649,180 @@ function DashboardPage({ items }) {
   );
 }
 
-function ScanPage({ items, initialSku, onToast }) {
+function parseSkuFromQrResult(text) {
+  if (!text || typeof text !== "string") return null;
+  const trimmed = text.trim().replace(/\s+/g, " ");
+  const skuParam = trimmed.match(/[?&]sku=([^#&\s]+)/i) || trimmed.match(/#scan\?sku=([^&\s]+)/i);
+  if (skuParam) return decodeURIComponent(skuParam[1]).trim();
+  const dalMatch = trimmed.match(/\b(DAL-\d+)\b/i);
+  if (dalMatch) return dalMatch[1].toUpperCase();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function CameraScanner({ onResult, onCancel, itemList }) {
+  const [error, setError] = useState(null);
+  const [lastDetected, setLastDetected] = useState(null);
+  const videoRef = useRef(null);
+  const onResultRef = useRef(onResult);
+  const itemListRef = useRef(itemList);
+  onResultRef.current = onResult;
+  itemListRef.current = itemList;
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    let stream = null;
+    let rafId = null;
+    let cancelled = false;
+
+    const cleanup = () => {
+      cancelled = true;
+      if (rafId != null) cancelAnimationFrame(rafId);
+      rafId = null;
+      if (stream) {
+        stream.getTracks().forEach((t) => t.stop());
+        stream = null;
+      }
+      if (video.srcObject) {
+        video.srcObject = null;
+      }
+    };
+
+    const startDecodeLoop = () => {
+      const reader = new QRCodeReader();
+      const captureCanvas = document.createElement("canvas");
+      const captureCtx = captureCanvas.getContext("2d", { willReadFrequently: true });
+      if (!captureCtx) return;
+
+      let frameCount = 0;
+      const tryDecode = () => {
+        if (cancelled || !video.srcObject || !stream) return;
+        const w = video.videoWidth;
+        const h = video.videoHeight;
+        if (w === 0 || h === 0) {
+          rafId = requestAnimationFrame(tryDecode);
+          return;
+        }
+        captureCanvas.width = w;
+        captureCanvas.height = h;
+        captureCtx.drawImage(video, 0, 0, w, h, 0, 0, w, h);
+        frameCount += 1;
+        if (frameCount % 2 === 0) {
+          try {
+            const luminanceSource = new HTMLCanvasElementLuminanceSource(captureCanvas);
+            const binaryBitmap = new BinaryBitmap(new HybridBinarizer(luminanceSource));
+            const result = reader.decode(binaryBitmap);
+            if (result) {
+              const raw = result.getText();
+              const sku = parseSkuFromQrResult(raw);
+              const list = itemListRef.current || [];
+              if (sku) {
+                const item = list.find((i) => i.sku.toUpperCase() === sku.toUpperCase());
+                if (item) {
+                  cleanup();
+                  onResultRef.current(item);
+                  return;
+                }
+              }
+              setLastDetected((raw && raw.length > 40 ? raw.slice(0, 40) + "…" : raw) || "");
+            }
+          } catch (_) {
+            // No code in frame
+          }
+        }
+        if (!cancelled) rafId = requestAnimationFrame(tryDecode);
+      };
+      rafId = requestAnimationFrame(tryDecode);
+    };
+
+    const playVideo = () =>
+      video.play().catch((err) => {
+        if (err?.name === "AbortError" || /interrupted|load request/i.test(err?.message ?? "")) {
+          return video.play();
+        }
+        throw err;
+      });
+
+    const constraints = {
+      video: {
+        facingMode: "environment",
+        width: { ideal: 1280, min: 640 },
+        height: { ideal: 720, min: 480 },
+      },
+      audio: false,
+    };
+
+    navigator.mediaDevices
+      .getUserMedia(constraints)
+      .then((s) => {
+        if (cancelled) {
+          s.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        stream = s;
+        video.srcObject = s;
+        video.muted = true;
+        video.playsInline = true;
+        return new Promise((resolve, reject) => {
+          let settled = false;
+          const onReady = () => {
+            if (settled) return;
+            video.removeEventListener("loadedmetadata", onReady);
+            video.removeEventListener("canplay", onReady);
+            settled = true;
+            playVideo().then(resolve).catch(reject);
+          };
+          if (video.videoWidth > 0) {
+            playVideo().then(resolve).catch(reject);
+          } else {
+            video.addEventListener("loadedmetadata", onReady);
+            video.addEventListener("canplay", onReady);
+          }
+        });
+      })
+      .then(() => {
+        if (!cancelled) startDecodeLoop();
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err?.message || "Camera access failed");
+      });
+
+    return cleanup;
+  }, []);
+
+  return (
+    <div>
+      <div className="scan-viewfinder" style={{ position: "relative" }}>
+        <video
+          ref={videoRef}
+          style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: 16 }}
+          muted
+          playsInline
+          autoPlay
+        />
+        <div className="scan-corner tl" /><div className="scan-corner tr" />
+        <div className="scan-corner bl" /><div className="scan-corner br" />
+        <div className="scan-line" />
+      </div>
+      {error && (
+        <div className="alert alert-red" style={{ marginTop: 12 }}>{error}</div>
+      )}
+      {lastDetected && (
+        <div style={{ marginTop: 8, fontSize: 12, color: "var(--accent)", fontWeight: 600 }}>
+          Detected: {lastDetected}
+        </div>
+      )}
+      <div className="card" style={{ textAlign: "center", marginTop: 20 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: "var(--steel)" }}>Point camera at QR code</div>
+        <div style={{ fontSize: 12, color: "var(--steel-light)", marginTop: 4 }}>Hold steady over the label</div>
+        <button type="button" className="btn btn-ghost" style={{ marginTop: 12 }} onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+function ScanPage({ items, initialSku, onToast, onScanLogged }) {
   const itemList = items || MOCK_ITEMS;
   const resolvedItem = initialSku ? itemList.find(i => i.sku.toUpperCase() === initialSku.toUpperCase()) : null;
   const [step, setStep] = useState(resolvedItem ? 'counting' : 'idle'); // idle | scanning | counting | done
@@ -623,19 +830,19 @@ function ScanPage({ items, initialSku, onToast }) {
   const [count, setCount] = useState(resolvedItem ? resolvedItem.lastCount : 0);
   const [notes, setNotes] = useState('');
 
-  const simulateScan = () => {
+  const startCameraScan = () => {
     setStep('scanning');
-    const itemList = items && items.length > 0 ? items : MOCK_ITEMS;
-    setTimeout(() => {
-      const item = itemList[Math.floor(Math.random() * itemList.length)];
-      setScannedItem(item);
-      setCount(item.lastCount || 0);
-      setStep('counting');
-    }, 2000);
+  };
+
+  const handleCameraResult = (item) => {
+    setScannedItem(item);
+    setCount(item.lastCount || 0);
+    setStep('counting');
   };
 
   const submitCount = () => {
     setStep('done');
+    if (onScanLogged) onScanLogged();
     onToast(`✓ ${scannedItem.name} — ${count} ${scannedItem.unit}s logged`);
     setTimeout(() => { setStep('idle'); setScannedItem(null); setNotes(''); }, 1500);
   };
@@ -650,9 +857,10 @@ function ScanPage({ items, initialSku, onToast }) {
             </div>
             <div style={{ fontFamily: "'Barlow Condensed', sans-serif", fontSize: 22, fontWeight: 700, color: 'var(--navy)', marginBottom: 8 }}>Ready to Scan</div>
             <p style={{ fontSize: 13, color: 'var(--steel)', marginBottom: 24 }}>Point your camera at a QR code label mounted on the wall to begin logging stock.</p>
-            <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center', padding: '14px' }} onClick={simulateScan}>
+            <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center', padding: '14px' }} onClick={startCameraScan}>
               <Scan size={16} /> Activate Camera & Scan
             </button>
+            <p style={{ fontSize: 11, color: 'var(--steel)', marginTop: 12 }}>No camera? Use &quot;Quick Scan&quot; below or allow camera access when prompted.</p>
           </div>
           <div className="card">
             <div className="section-title" style={{ fontSize: 15 }}>Quick Scan — Select Item</div>
@@ -672,18 +880,11 @@ function ScanPage({ items, initialSku, onToast }) {
       )}
 
       {step === 'scanning' && (
-        <div>
-          <div className="scan-viewfinder">
-            <div className="scan-corner tl" /><div className="scan-corner tr" />
-            <div className="scan-corner bl" /><div className="scan-corner br" />
-            <div className="scan-line" />
-            <div className="scan-icon-center"><Camera size={64} /></div>
-          </div>
-          <div className="card" style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--steel)' }}>🔍 Scanning for QR code...</div>
-            <div style={{ fontSize: 12, color: 'var(--steel-light)', marginTop: 4 }}>Hold camera steady over the label</div>
-          </div>
-        </div>
+        <CameraScanner
+          itemList={itemList}
+          onResult={handleCameraResult}
+          onCancel={() => setStep('idle')}
+        />
       )}
 
       {step === 'counting' && scannedItem && (
@@ -985,10 +1186,10 @@ function ReportsPage({ items, reports, onAddReport, onToast }) {
   );
 }
 
-function KPIPage({ items }) {
+function KPIPage({ items, scannedToday: scannedTodayProp, totalItems: totalItemsProp }) {
   const itemList = items || MOCK_ITEMS;
-  const totalItems = itemList.length;
-  const scannedToday = Math.min(6, Math.floor(totalItems * 0.8));
+  const totalItems = totalItemsProp ?? itemList.length;
+  const scannedToday = scannedTodayProp ?? Math.min(6, Math.floor(totalItems * 0.8));
   const completionPct = totalItems ? Math.round((scannedToday / totalItems) * 100) : 0;
 
   return (
@@ -1159,18 +1360,49 @@ function parseScanHash() {
   return params.get("sku");
 }
 
+const SCANNED_STORAGE_KEY = "inventory-flow-scanned";
+function getIrishDateString() {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Dublin", year: "numeric", month: "2-digit", day: "2-digit" }).replace(/-/g, "");
+}
+function getScannedTodayFromStorage() {
+  if (typeof window === "undefined") return 0;
+  const key = SCANNED_STORAGE_KEY + getIrishDateString();
+  const v = localStorage.getItem(key);
+  return v ? parseInt(v, 10) : 0;
+}
+function incrementScannedTodayStorage() {
+  const dateKey = getIrishDateString();
+  const key = SCANNED_STORAGE_KEY + dateKey;
+  const prev = parseInt(localStorage.getItem(key) || "0", 10);
+  localStorage.setItem(key, String(prev + 1));
+}
+
 export default function App() {
-  const [authed, setAuthed] = useState(false);
+  const [session, setSession] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [page, setPage] = useState('dashboard');
   const [items, setItems] = useState(MOCK_ITEMS);
   const [toast, setToast] = useState(null);
   const [initialSku, setInitialSku] = useState(null);
+  const [irishDateKey, setIrishDateKey] = useState(() => (typeof window !== "undefined" ? getIrishDateString() : ""));
+  const [scannedToday, setScannedToday] = useState(() => getScannedTodayFromStorage());
   const [reports, setReports] = useState([
     { id: 'r1', name: "Daily Stock Report — 04 Mar 2026", date: "04 Mar 2026, 09:00", by: "Seán Murphy", items: 12, dateObj: new Date(2026, 2, 4, 9, 0) },
     { id: 'r2', name: "Daily Stock Report — 03 Mar 2026", date: "03 Mar 2026, 08:45", by: "Aoife Kelly", items: 15, dateObj: new Date(2026, 2, 3, 8, 45) },
     { id: 'r3', name: "Daily Stock Report — 02 Mar 2026", date: "02 Mar 2026, 09:12", by: "Seán Murphy", items: 10, dateObj: new Date(2026, 2, 2, 9, 12) },
     { id: 'r4', name: "Weekly Summary — W9 2026", date: "28 Feb 2026, 17:00", by: "Seán Murphy", items: 50, dateObj: new Date(2026, 1, 28, 17, 0) },
   ]);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setAuthLoading(false);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
 
   useEffect(() => {
     const sku = parseScanHash();
@@ -1185,10 +1417,41 @@ export default function App() {
     if (page !== 'scan') setInitialSku(null);
   }, [page]);
 
-  if (!authed) return (
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const next = getIrishDateString();
+      if (next !== irishDateKey) {
+        setIrishDateKey(next);
+        setScannedToday(getScannedTodayFromStorage());
+      }
+    }, 60000);
+    return () => clearInterval(interval);
+  }, [irishDateKey]);
+
+  const handleScanLogged = () => {
+    incrementScannedTodayStorage();
+    setScannedToday(getScannedTodayFromStorage());
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+  };
+
+  if (authLoading) {
+    return (
+      <>
+        <style>{css}</style>
+        <div className="login-page" style={{ alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ color: '#fff', fontSize: 16 }}>Loading...</div>
+        </div>
+      </>
+    );
+  }
+
+  if (!session) return (
     <>
       <style>{css}</style>
-      <LoginPage onLogin={() => setAuthed(true)} />
+      <LoginPage onLogin={() => supabase.auth.getSession().then(({ data }) => setSession(data.session))} />
     </>
   );
 
@@ -1218,12 +1481,14 @@ export default function App() {
             ))}
           </nav>
           <div className="sidebar-user">
-            <div className="user-avatar">SM</div>
-            <div>
-              <div className="user-name">Seán Murphy</div>
-              <div className="user-role">Administrator</div>
+            <div className="user-avatar">
+              {(session?.user?.email || 'U').charAt(0).toUpperCase()}
             </div>
-            <button className="logout-btn" onClick={() => setAuthed(false)}><LogOut size={14} /></button>
+            <div>
+              <div className="user-name">{session?.user?.user_metadata?.full_name || session?.user?.email?.split('@')[0] || 'User'}</div>
+              <div className="user-role">{session?.user?.email}</div>
+            </div>
+            <button className="logout-btn" onClick={handleLogout} title="Sign out"><LogOut size={14} /></button>
           </div>
         </aside>
 
@@ -1245,12 +1510,12 @@ export default function App() {
           </div>
 
           <div className="content">
-            {page === 'dashboard' && <DashboardPage items={items} />}
-            {page === 'scan' && <ScanPage items={items} initialSku={initialSku} onToast={(msg) => setToast(msg)} />}
+            {page === 'dashboard' && <DashboardPage items={items} scannedToday={scannedToday} totalItems={items.length} />}
+            {page === 'scan' && <ScanPage items={items} initialSku={initialSku} onToast={(msg) => setToast(msg)} onScanLogged={handleScanLogged} />}
             {page === 'items' && <ItemsPage items={items} onAddItem={(item) => setItems([...items, { ...item, id: String(items.length + 1), lastCount: 0, lastLogged: '—' }])} onToast={(msg) => setToast(msg)} />}
             {page === 'qrcodes' && <QRPage items={items} />}
             {page === 'reports' && <ReportsPage items={items} reports={reports} onAddReport={(r) => setReports(prev => [r, ...prev])} onToast={(msg) => setToast(msg)} />}
-            {page === 'kpi' && <KPIPage items={items} />}
+            {page === 'kpi' && <KPIPage items={items} scannedToday={scannedToday} totalItems={items.length} />}
           </div>
         </div>
       </div>

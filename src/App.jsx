@@ -3,7 +3,7 @@ import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend
 } from "recharts";
-import { Package, QrCode, BarChart3, FileText, LogOut, Scan, Plus, Search, Printer, TrendingUp, TrendingDown, Users, CheckCircle, AlertTriangle, Clock, ChevronRight, X, Check, Camera, Download, Eye, Shield, Activity, Box, Layers } from "lucide-react";
+import { Package, QrCode, BarChart3, FileText, LogOut, Scan, Plus, Search, Printer, TrendingUp, TrendingDown, Users, CheckCircle, AlertTriangle, Clock, ChevronRight, X, Check, Camera, Download, Eye, Shield, Activity, Box, Layers, Menu } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { jsPDF } from "jspdf";
 import "jspdf-autotable";
@@ -405,8 +405,34 @@ const css = `
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
+  /* Mobile: collapsible sidebar */
+  .sidebar-toggle {
+    display: none;
+    background: none; border: none; padding: 8px; margin: 0 -8px 0 0;
+    color: var(--navy); cursor: pointer; border-radius: 8px;
+  }
+  .sidebar-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4);
+    z-index: 250; opacity: 0; pointer-events: none; transition: opacity 0.2s;
+  }
+  .sidebar-overlay.active { opacity: 1; pointer-events: auto; }
+
   @media (max-width: 900px) {
-    .sidebar { width: 200px; }
+    .sidebar {
+      position: fixed; left: 0; top: 0; bottom: 0; z-index: 300;
+      width: 260px; max-width: 85vw;
+      transform: translateX(-100%); transition: transform 0.25s ease;
+      box-shadow: none;
+    }
+    .sidebar.open {
+      transform: translateX(0);
+      box-shadow: 4px 0 24px rgba(0,0,0,0.2);
+    }
+    .sidebar-overlay { display: block; }
+    .sidebar-toggle { display: flex; align-items: center; justify-content: center; }
+    .main { min-width: 0; }
+    .topbar { padding-left: 16px; padding-right: 16px; }
+    .content { padding: 16px; }
     .stat-grid { grid-template-columns: repeat(2, 1fr); }
     .kpi-grid { grid-template-columns: 1fr; }
     .grid-2 { grid-template-columns: 1fr; }
@@ -1381,6 +1407,7 @@ export default function App() {
   const [session, setSession] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [page, setPage] = useState('dashboard');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [items, setItems] = useState(MOCK_ITEMS);
   const [toast, setToast] = useState(null);
   const [initialSku, setInitialSku] = useState(null);
@@ -1461,7 +1488,8 @@ export default function App() {
     <>
       <style>{css}</style>
       <div className="app">
-        <aside className="sidebar">
+        <div className={`sidebar-overlay ${sidebarOpen ? 'active' : ''}`} onClick={() => setSidebarOpen(false)} aria-hidden="true" />
+        <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
           <div className="sidebar-logo">
             <div className="logo-mark">INVENTORY FLOW</div>
             <div className="logo-sub">Stock Manager</div>
@@ -1471,7 +1499,11 @@ export default function App() {
               <div key={sec}>
                 <div className="nav-section">{sec}</div>
                 {NAV.filter(n => n.section === sec).map(n => (
-                  <div key={n.id} className={`nav-item ${page === n.id ? 'active' : ''}`} onClick={() => setPage(n.id)}>
+                  <div
+                    key={n.id}
+                    className={`nav-item ${page === n.id ? 'active' : ''}`}
+                    onClick={() => { setPage(n.id); setSidebarOpen(false); }}
+                  >
                     {n.icon}{n.label}
                     {n.id === 'scan' && <span className="badge" style={{ marginLeft: 'auto', fontSize: 9 }}>LIVE</span>}
                     {n.id === 'kpi' && <span className="badge" style={{ marginLeft: 'auto', fontSize: 9, background: '#16a34a' }}>KPI</span>}
@@ -1494,6 +1526,9 @@ export default function App() {
 
         <div className="main">
           <div className="topbar">
+            <button type="button" className="sidebar-toggle" onClick={() => setSidebarOpen(true)} aria-label="Open menu">
+              <Menu size={24} />
+            </button>
             <div>
               <div className="topbar-title">{PAGE_TITLES[page]}</div>
               <div className="topbar-breadcrumb">Inventory Flow · {PAGE_TITLES[page]}</div>
